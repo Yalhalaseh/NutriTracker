@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>NutriTrack AI</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div id="authScreen" class="auth-shell">
+    <section class="auth-card">
+      <div class="brand"><span class="brand-mark">N</span><div><strong>NutriTrack AI</strong><small>Nutrition, habits & progress</small></div></div>
+      <h1>Build a routine you can keep.</h1>
+      <p class="muted">Track meals, water, habits, weight trends and weekly progress. AI coaching is optional.</p>
+      <div class="tabs"><button id="loginTab" class="active">Sign in</button><button id="registerTab">Create account</button></div>
+      <form id="authForm" class="stack">
+        <input id="authName" placeholder="Name" autocomplete="name" class="hidden" />
+        <input id="authEmail" type="email" placeholder="Email" required autocomplete="email" />
+        <input id="authPassword" type="password" placeholder="Password (8+ characters)" required autocomplete="current-password" />
+        <button class="primary" type="submit" id="authSubmit">Sign in</button>
+        <p id="authError" class="error"></p>
+      </form>
+      <p class="tiny">Your account data is stored on the app server. This starter is designed for personal/demo use, not regulated medical data.</p>
+    </section>
+  </div>
+
+  <div id="appShell" class="hidden">
+    <header>
+      <div class="brand"><span class="brand-mark">N</span><div><strong>NutriTrack AI</strong><small id="todayLabel"></small></div></div>
+      <div class="header-actions"><span id="aiPill" class="pill">AI checking…</span><span id="userName"></span><button id="logoutBtn" class="ghost">Log out</button></div>
+    </header>
+
+    <nav id="nav">
+      <button data-view="dashboard" class="active">Dashboard</button>
+      <button data-view="meals">Meals</button>
+      <button data-view="progress">Progress</button>
+      <button data-view="grocery">Grocery</button>
+      <button data-view="coach">AI Coach</button>
+      <button data-view="settings">Plan</button>
+    </nav>
+
+    <main>
+      <section id="dashboard" class="view active">
+        <div class="hero-card"><div><span class="eyebrow">TODAY</span><h2 id="greeting">Your next helpful choice counts.</h2><p id="motivation"></p></div><div class="streak"><strong id="streak">0</strong><span>day streak</span></div></div>
+        <div class="metrics">
+          <article><span>Calories</span><strong><b id="caloriesNow">0</b> / <i id="caloriesGoal">2000</i></strong><div class="bar"><i id="calBar"></i></div></article>
+          <article><span>Protein</span><strong><b id="proteinNow">0</b> / <i id="proteinGoal">120</i> g</strong><div class="bar"><i id="proteinBar"></i></div></article>
+          <article><span>Water</span><strong><b id="waterNow">0</b> / <i id="waterGoal">8</i> cups</strong><div class="bar"><i id="waterBar"></i></div></article>
+          <article><span>Habits</span><strong><b id="habitsNow">0</b> / 4</strong><div class="bar"><i id="habitBar"></i></div></article>
+        </div>
+        <div class="grid two">
+          <article class="card"><div class="card-head"><div><span class="eyebrow">HYDRATION</span><h3 id="waterBig">0 cups</h3></div><div><button id="minusWater" class="round">−</button><button id="plusWater" class="round">+</button></div></div><p class="muted">Log one cup at a time. Your target can be changed in Plan.</p></article>
+          <article class="card"><span class="eyebrow">DAILY HABITS</span><div id="habitList" class="habit-list"></div></article>
+        </div>
+        <article class="card"><div class="card-head"><div><span class="eyebrow">TODAY'S MEALS</span><h3>Recent entries</h3></div><button class="text-btn" data-go="meals">Add meal →</button></div><div id="dashboardMeals"></div></article>
+      </section>
+
+      <section id="meals" class="view">
+        <div class="section-title"><div><span class="eyebrow">FOOD LOG</span><h2>Meals & photos</h2></div><button id="clearToday" class="danger-ghost">Clear today</button></div>
+        <div class="grid two">
+          <article class="card">
+            <h3>Add a meal</h3>
+            <form id="mealForm" class="stack">
+              <div class="row"><select id="mealType"><option>Breakfast</option><option>Lunch</option><option>Dinner</option><option>Snack</option></select><input id="mealName" placeholder="Food or meal" required /></div>
+              <div class="row"><input id="mealCalories" type="number" min="0" step="1" placeholder="Calories" required /><input id="mealProtein" type="number" min="0" step="0.1" placeholder="Protein (g)" required /></div>
+              <input id="barcodeInput" placeholder="Barcode / UPC (optional)" inputmode="numeric" />
+              <div class="photo-box"><input id="mealPhoto" type="file" accept="image/*" capture="environment" /><img id="photoPreview" class="hidden" alt="Meal preview" /><span id="photoHint">Add a food photo (optional)</span></div>
+              <button class="primary" type="submit">Save meal</button>
+            </form>
+            <div class="barcode-note"><strong>Barcode:</strong> on supported phones, use the camera button below; otherwise type the UPC manually.</div>
+            <button id="scanBarcode" class="secondary">Scan barcode with camera</button>
+            <video id="barcodeVideo" class="hidden" playsinline></video>
+          </article>
+          <article class="card"><h3>Today</h3><div id="mealList"></div></article>
+        </div>
+      </section>
+
+      <section id="progress" class="view">
+        <div class="section-title"><div><span class="eyebrow">PROGRESS</span><h2>Weight & consistency</h2></div></div>
+        <div class="grid two">
+          <article class="card"><h3>Log weight</h3><form id="weightForm" class="row"><input id="weightValue" type="number" min="20" max="1000" step="0.1" placeholder="Weight" required /><select id="weightUnit"><option>lb</option><option>kg</option></select><button class="primary" type="submit">Add</button></form><p class="tiny">Use weight trends as one signal, not a judgment of daily success.</p></article>
+          <article class="card"><div class="stat-pair"><div><span>Latest</span><strong id="latestWeight">—</strong></div><div><span>7-day active days</span><strong id="activeDays">0</strong></div></div></article>
+        </div>
+        <article class="card"><h3>Weight trend</h3><canvas id="weightChart" width="1000" height="320"></canvas></article>
+        <article class="card"><h3>Recent entries</h3><div id="weightList"></div></article>
+      </section>
+
+      <section id="grocery" class="view">
+        <div class="section-title"><div><span class="eyebrow">SHOPPING</span><h2>Grocery list</h2></div><button id="buildGrocery" class="secondary">Build from meal plan</button></div>
+        <article class="card"><form id="groceryForm" class="row"><input id="groceryItem" placeholder="Add grocery item" required /><select id="groceryCategory"><option>Produce</option><option>Protein</option><option>Dairy</option><option>Grains</option><option>Pantry</option><option>Other</option></select><button class="primary" type="submit">Add</button></form><div id="groceryList" class="grocery-list"></div></article>
+      </section>
+
+      <section id="coach" class="view">
+        <div class="section-title"><div><span class="eyebrow">OPTIONAL AI</span><h2>ChatGPT feedback</h2></div><span id="aiStatus" class="pill">Checking…</span></div>
+        <div class="grid two">
+          <article class="card"><h3>Ask for feedback</h3><div id="chat" class="chat"></div><form id="chatForm" class="stack"><textarea id="chatInput" rows="4" placeholder="Example: How can I make today's meals more balanced?" required></textarea><button class="primary" type="submit">Get feedback</button></form></article>
+          <article class="card"><div class="card-head"><div><h3>Weekly review</h3><p class="muted">Summarizes your recent logs into practical next steps.</p></div><button id="weeklyReportBtn" class="secondary">Generate</button></div><div id="weeklyReport" class="report empty">No weekly review yet.</div></article>
+        </div>
+      </section>
+
+      <section id="settings" class="view">
+        <div class="section-title"><div><span class="eyebrow">PERSONAL PLAN</span><h2>Goals & meal ideas</h2></div></div>
+        <div class="grid two">
+          <article class="card"><form id="profileForm" class="stack"><label>Goal<select id="goal"><option>Maintain weight</option><option>Gradual weight loss</option><option>Gradual weight gain</option><option>Improve food quality</option><option>Build consistent habits</option></select></label><div class="row"><label>Daily calorie target<input id="targetCalories" type="number" min="800" max="6000" /></label><label>Protein target (g)<input id="targetProtein" type="number" min="20" max="400" /></label></div><label>Water target (cups)<input id="targetWater" type="number" min="1" max="30" /></label><label>Eating style<select id="dietStyle"><option>Balanced</option><option>Mediterranean</option><option>Vegetarian</option><option>Vegan</option><option>High-protein</option><option>Lower-carb</option></select></label><label>Foods you like<textarea id="likes" rows="2"></textarea></label><label>Foods to avoid / preferences<textarea id="avoid" rows="2"></textarea></label><button class="primary" type="submit">Save preferences</button></form></article>
+          <article class="card"><div class="card-head"><div><h3>Suggested day</h3><p class="muted">A flexible template based on your preferences.</p></div><button id="generatePlan" class="secondary">Generate</button></div><div id="plan"></div><p class="tiny">Targets and meal ideas are planning tools, not medical prescriptions. For medical diets or conditions, use guidance from your clinician or registered dietitian.</p></article>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>
