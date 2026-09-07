@@ -6,16 +6,20 @@ import { createClient } from '@supabase/supabase-js';
 
 import path from 'path';
 import fs from 'fs/promises';
-import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
 
-// Supabase connection
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_ANON_KEY,
+  {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false
+    }
+  }
 );
 
 const __filename = fileURLToPath(import.meta.url);
@@ -24,17 +28,11 @@ const __dirname = path.dirname(__filename);
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'store.json');
 
-const SESSION_SECRET =
-  process.env.SESSION_SECRET || 'dev-only-change-me';
-
-const TOKEN_TTL = 1000 * 60 * 60 * 24 * 30;
-
 app.use(express.json({ limit: '4mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 const blankStore = () => ({
-  users: {},
-  sessions: {}
+  users: {}
 });
 
 async function loadStore() {
@@ -60,49 +58,6 @@ async function saveStore(store) {
   );
 }
 
-function id() {
-  return crypto.randomUUID();
-}
-
-function hashText(value) {
-  return crypto
-    .createHmac('sha256', SESSION_SECRET)
-    .update(value)
-    .digest('hex');
-}
-
-function hashPassword(
-  password,
-  salt = crypto.randomBytes(16).toString('hex')
-) {
-  const hash = crypto
-    .scryptSync(password, salt, 64)
-    .toString('hex');
-
-  return {
-    salt,
-    hash
-  };
-}
-
-function verifyPassword(password, salt, expected) {
-  const actual = crypto.scryptSync(
-    password,
-    salt,
-    64
-  );
-
-  const target = Buffer.from(
-    expected,
-    'hex'
-  );
-
-  return (
-    actual.length === target.length &&
-    crypto.timingSafeEqual(actual, target)
-  );
-}
-
 function defaultData(name = 'Friend') {
   return {
     profile: {
@@ -124,26 +79,62 @@ function defaultData(name = 'Friend') {
   };
 }
 
+async function getOrCreateLocalUser(supabaseUser) {
+  const store = await loadStore();
+
+  const userId = supabaseUser.id;
+
+  const name =
+    supabaseUser.user_metadata?.name ||
+    supabaseUser.user_metadata?.full_name ||
+    supabaseUser.email?.split('@')[0] ||
+    'Friend';
+
+  if (!store.users[userId]) {
+    store.users[userId] = {
+      id: userId,
+      email: supabaseUser.email,
+      name,
+      data: defaultData(name)
+    };
+
+    await saveStore(store);
+  } else {
+    store.users[userId].email =
+      supabaseUser.email;
+
+    if (!store.users[userId].name) {
+      store.users[userId].name = name;
+    }
+
+    await saveStore(store);
+  }
+
+  return {
+    store,
+    user: store.users[userId]
+  };
+}
+
 async function requireAuth(req, res, next) {
-  const raw = (
+  const token = (
     req.headers.authorization || ''
   ).replace(/^Bearer\s+/i, '');
 
-  if (!raw) {
+  if (!token) {
     return res.status(401).json({
       error: 'Please sign in.'
     });
   }
 
-  const store = await loadStore();
-
-  const session =
-    store.sessions[hashText(raw)];
+  const {
+    data,
+    error
+  } = await supabase.auth.getUser(token);
 
   if (
-    !session ||
-    session.expiresAt < Date.now() ||
-    !store.users[session.userId]
+    error ||
+    !data?.user
   ) {
     return res.status(401).json({
       error:
@@ -151,181 +142,201 @@ async function requireAuth(req, res, next) {
     });
   }
 
+  const {
+    store,
+    user
+  } = await getOrCreateLocalUser(
+    data.user
+  );
+
+  req.accessToken = token;
+  req.supabaseUser = data.user;
   req.store = store;
-  req.user = store.users[session.userId];
-  req.userId = session.userId;
+  req.user = user;
+  req.userId = data.user.id;
 
   next();
 }
 
-app.get('/api/health', (_req, res) => {
-  res.json({
-    ok: true,
+app.get(
+  '/api/health',
+  (_req, res) => {
+    res.json({
+      ok: true,
 
-    aiConfigured: Boolean(
-      process.env.OPENAI_API_KEY
-    ),
+      aiConfigured: Boolean(
+        process.env.OPENAI_API_KEY
+      ),
 
-    supabaseConfigured: Boolean(
-      process.env.SUPABASE_URL &&
-      process.env.SUPABASE_ANON_KEY
-    )
-  });
-});
-
-app.post('/api/auth/register', async (req, res) => {
-  const email = String(
-    req.body?.email || ''
-  )
-    .trim()
-    .toLowerCase();
-
-  const name = String(
-    req.body?.name || ''
-  )
-    .trim()
-    .slice(0, 60);
-
-  const password = String(
-    req.body?.password || ''
-  );
-
-  if (!/^\S+@\S+\.\S+$/.test(email)) {
-    return res.status(400).json({
-      error: 'Enter a valid email.'
+      supabaseConfigured: Boolean(
+        process.env.SUPABASE_URL &&
+        process.env.SUPABASE_ANON_KEY
+      )
     });
   }
+);
 
-  if (password.length < 8) {
-    return res.status(400).json({
-      error:
-        'Password must be at least 8 characters.'
-    });
-  }
-
-  const store = await loadStore();
-
-  if (
-    Object.values(store.users).some(
-      (user) => user.email === email
+app.post(
+  '/api/auth/register',
+  async (req, res) => {
+    const email = String(
+      req.body?.email || ''
     )
-  ) {
-    return res.status(409).json({
-      error:
-        'An account already exists for that email.'
-    });
-  }
+      .trim()
+      .toLowerCase();
 
-  const userId = id();
-  const passwordData =
-    hashPassword(password);
-
-  store.users[userId] = {
-    id: userId,
-    email,
-    name: name || email.split('@')[0],
-    ...passwordData,
-    data: defaultData(
-      name || email.split('@')[0]
+    const name = String(
+      req.body?.name || ''
     )
-  };
+      .trim()
+      .slice(0, 60);
 
-  const token = crypto
-    .randomBytes(32)
-    .toString('hex');
+    const password = String(
+      req.body?.password || ''
+    );
 
-  store.sessions[hashText(token)] = {
-    userId,
-    expiresAt: Date.now() + TOKEN_TTL
-  };
+    if (
+      !/^\S+@\S+\.\S+$/.test(email)
+    ) {
+      return res
+        .status(400)
+        .json({
+          error:
+            'Enter a valid email.'
+        });
+    }
 
-  await saveStore(store);
+    if (password.length < 8) {
+      return res
+        .status(400)
+        .json({
+          error:
+            'Password must be at least 8 characters.'
+        });
+    }
 
-  res.json({
-    token,
-
-    user: {
-      id: userId,
+    const {
+      data,
+      error
+    } = await supabase.auth.signUp({
       email,
-      name: store.users[userId].name
-    },
-
-    data: store.users[userId].data
-  });
-});
-
-app.post('/api/auth/login', async (req, res) => {
-  const email = String(
-    req.body?.email || ''
-  )
-    .trim()
-    .toLowerCase();
-
-  const password = String(
-    req.body?.password || ''
-  );
-
-  const store = await loadStore();
-
-  const user = Object.values(
-    store.users
-  ).find(
-    (currentUser) =>
-      currentUser.email === email
-  );
-
-  if (
-    !user ||
-    !verifyPassword(
       password,
-      user.salt,
-      user.hash
-    )
-  ) {
-    return res.status(401).json({
-      error:
-        'Incorrect email or password.'
+      options: {
+        data: {
+          name:
+            name ||
+            email.split('@')[0]
+        }
+      }
+    });
+
+    if (error) {
+      return res
+        .status(400)
+        .json({
+          error: error.message
+        });
+    }
+
+    if (!data.user) {
+      return res
+        .status(400)
+        .json({
+          error:
+            'Unable to create account.'
+        });
+    }
+
+    const {
+      user
+    } = await getOrCreateLocalUser(
+      data.user
+    );
+
+    if (!data.session?.access_token) {
+      return res.json({
+        needsConfirmation: true,
+        message:
+          'Account created. Check your email if confirmation is required.'
+      });
+    }
+
+    res.json({
+      token:
+        data.session.access_token,
+
+      user: {
+        id: data.user.id,
+        email: data.user.email,
+        name: user.name
+      },
+
+      data: user.data
     });
   }
+);
 
-  const token = crypto
-    .randomBytes(32)
-    .toString('hex');
+app.post(
+  '/api/auth/login',
+  async (req, res) => {
+    const email = String(
+      req.body?.email || ''
+    )
+      .trim()
+      .toLowerCase();
 
-  store.sessions[hashText(token)] = {
-    userId: user.id,
-    expiresAt: Date.now() + TOKEN_TTL
-  };
+    const password = String(
+      req.body?.password || ''
+    );
 
-  await saveStore(store);
+    const {
+      data,
+      error
+    } =
+      await supabase.auth.signInWithPassword({
+        email,
+        password
+      });
 
-  res.json({
-    token,
+    if (
+      error ||
+      !data.user ||
+      !data.session
+    ) {
+      return res
+        .status(401)
+        .json({
+          error:
+            error?.message ||
+            'Incorrect email or password.'
+        });
+    }
 
-    user: {
-      id: user.id,
-      email: user.email,
-      name: user.name
-    },
+    const {
+      user
+    } = await getOrCreateLocalUser(
+      data.user
+    );
 
-    data: user.data
-  });
-});
+    res.json({
+      token:
+        data.session.access_token,
+
+      user: {
+        id: data.user.id,
+        email: data.user.email,
+        name: user.name
+      },
+
+      data: user.data
+    });
+  }
+);
 
 app.post(
   '/api/auth/logout',
   requireAuth,
-  async (req, res) => {
-    const raw = (
-      req.headers.authorization || ''
-    ).replace(/^Bearer\s+/i, '');
-
-    delete req.store.sessions[
-      hashText(raw)
-    ];
-
-    await saveStore(req.store);
-
+  async (_req, res) => {
     res.json({
       ok: true
     });
@@ -352,20 +363,26 @@ app.put(
   '/api/data',
   requireAuth,
   async (req, res) => {
-    const data = req.body?.data;
+    const data =
+      req.body?.data;
 
     if (
       !data ||
       typeof data !== 'object'
     ) {
-      return res.status(400).json({
-        error: 'Invalid data.'
-      });
+      return res
+        .status(400)
+        .json({
+          error:
+            'Invalid data.'
+        });
     }
 
     req.user.data = data;
 
-    await saveStore(req.store);
+    await saveStore(
+      req.store
+    );
 
     res.json({
       ok: true
@@ -374,55 +391,79 @@ app.put(
 );
 
 function summarizeData(data) {
-  const entries = Object.entries(
-    data.days || {}
-  )
-    .sort()
-    .slice(-7);
+  const entries =
+    Object.entries(
+      data.days || {}
+    )
+      .sort()
+      .slice(-7);
 
-  const recent = entries.map(
-    ([date, day]) => ({
-      date,
+  const recent =
+    entries.map(
+      ([date, day]) => ({
+        date,
 
-      meals: (day.meals || []).map(
-        (meal) => ({
+        meals: (
+          day.meals || []
+        ).map((meal) => ({
           name: meal.name,
           type: meal.type,
-          calories: meal.calories,
-          protein: meal.protein
-        })
-      ),
+          calories:
+            meal.calories,
+          protein:
+            meal.protein
+        })),
 
-      water: day.water,
-      habits: day.habits
-    })
-  );
+        water:
+          day.water,
+
+        habits:
+          day.habits
+      })
+    );
 
   return {
-    profile: data.profile,
+    profile:
+      data.profile,
+
     recent,
-    weights: (data.weights || []).slice(-8)
+
+    weights: (
+      data.weights || []
+    ).slice(-8)
   };
 }
 
-async function runAI(instructions, input) {
-  if (!process.env.OPENAI_API_KEY) {
+async function runAI(
+  instructions,
+  input
+) {
+  if (
+    !process.env
+      .OPENAI_API_KEY
+  ) {
     throw Object.assign(
-      new Error('AI is not configured.'),
+      new Error(
+        'AI is not configured.'
+      ),
       {
         status: 503
       }
     );
   }
 
-  const client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-  });
+  const client =
+    new OpenAI({
+      apiKey:
+        process.env
+          .OPENAI_API_KEY
+    });
 
   const response =
     await client.responses.create({
       model:
-        process.env.OPENAI_MODEL ||
+        process.env
+          .OPENAI_MODEL ||
         'gpt-5.6-luna',
 
       instructions,
@@ -444,27 +485,39 @@ app.post(
     ).trim();
 
     if (!message) {
-      return res.status(400).json({
-        error: 'Write a question first.'
-      });
+      return res
+        .status(400)
+        .json({
+          error:
+            'Write a question first.'
+        });
     }
 
     try {
-      const context = JSON.stringify(
-        summarizeData(req.user.data)
-      ).slice(0, 14000);
+      const context =
+        JSON.stringify(
+          summarizeData(
+            req.user.data
+          )
+        ).slice(
+          0,
+          14000
+        );
 
-      const reply = await runAI(
-        `You are a supportive nutrition and habit coach inside a wellness app. Use the supplied app data only as context. Give practical, non-judgmental suggestions. Do not diagnose disease or prescribe treatment. Do not encourage crash diets, purging, starvation, unsafe supplements, or extreme restriction. If pregnancy, eating disorders, serious symptoms, medical conditions, or medically prescribed diets are relevant, recommend a qualified clinician or registered dietitian. Avoid false precision around calorie needs. Keep replies concise and actionable. App data: ${context}`,
-        message
-      );
+      const reply =
+        await runAI(
+          `You are a supportive nutrition and habit coach inside a wellness app. Use the supplied app data only as context. Give practical, non-judgmental suggestions. Do not diagnose disease or prescribe treatment. Do not encourage crash diets, purging, starvation, unsafe supplements, or extreme restriction. If pregnancy, eating disorders, serious symptoms, medical conditions, or medically prescribed diets are relevant, recommend a qualified clinician or registered dietitian. Avoid false precision around calorie needs. Keep replies concise and actionable. App data: ${context}`,
+          message
+        );
 
       res.json({
         reply
       });
     } catch (error) {
       res
-        .status(error.status || 500)
+        .status(
+          error.status || 500
+        )
         .json({
           error:
             error.status === 503
@@ -480,21 +533,30 @@ app.post(
   requireAuth,
   async (req, res) => {
     try {
-      const context = JSON.stringify(
-        summarizeData(req.user.data)
-      ).slice(0, 16000);
+      const context =
+        JSON.stringify(
+          summarizeData(
+            req.user.data
+          )
+        ).slice(
+          0,
+          16000
+        );
 
-      const report = await runAI(
-        `Create a short weekly nutrition and habit review from the supplied data. Use four headings: Wins, Patterns, Next-week focus, Encouragement. Never diagnose or shame. If data is sparse, say so. Keep recommendations practical and moderate. App data: ${context}`,
-        'Generate my weekly review.'
-      );
+      const report =
+        await runAI(
+          `Create a short weekly nutrition and habit review from the supplied data. Use four headings: Wins, Patterns, Next-week focus, Encouragement. Never diagnose or shame. If data is sparse, say so. Keep recommendations practical and moderate. App data: ${context}`,
+          'Generate my weekly review.'
+        );
 
       res.json({
         report
       });
     } catch (error) {
       res
-        .status(error.status || 500)
+        .status(
+          error.status || 500
+        )
         .json({
           error:
             error.status === 503
@@ -505,18 +567,23 @@ app.post(
   }
 );
 
-app.use((_req, res) => {
-  res.sendFile(
-    path.join(
-      __dirname,
-      'public',
-      'index.html'
-    )
-  );
-});
+app.use(
+  (_req, res) => {
+    res.sendFile(
+      path.join(
+        __dirname,
+        'public',
+        'index.html'
+      )
+    );
+  }
+);
 
-app.listen(port, () => {
-  console.log(
-    `NutriTrack AI v2 running at http://localhost:${port}`
-  );
-});
+app.listen(
+  port,
+  () => {
+    console.log(
+      `NutriTrack AI running at http://localhost:${port}`
+    );
+  }
+);
