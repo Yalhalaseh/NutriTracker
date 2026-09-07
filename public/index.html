@@ -56,7 +56,7 @@
       </section>
 
       <section id="meals" class="view">
-        <div class="section-title"><div><span class="eyebrow">FOOD LOG</span><h2>Meals & photos</h2></div><button id="clearToday" class="danger-ghost">Clear today</button></div>
+        <div class="section-title"><div><span class="eyebrow">FOOD LOG</span><h2>Meals & photos</h2></div><div class="section-actions"><button class="back-dashboard ghost" data-go="dashboard">← Dashboard</button><button id="clearToday" class="danger-ghost">Clear today</button></div></div>
         <div class="grid two">
           <article class="card">
             <h3>Add a meal</h3>
@@ -76,7 +76,7 @@
       </section>
 
       <section id="progress" class="view">
-        <div class="section-title"><div><span class="eyebrow">PROGRESS</span><h2>Weight & consistency</h2></div></div>
+        <div class="section-title"><div><span class="eyebrow">PROGRESS</span><h2>Weight & consistency</h2></div><button class="back-dashboard ghost" data-go="dashboard">← Dashboard</button></div>
         <div class="grid two">
           <article class="card"><h3>Log weight</h3><form id="weightForm" class="row"><input id="weightValue" type="number" min="20" max="1000" step="0.1" placeholder="Weight" required /><select id="weightUnit"><option>lb</option><option>kg</option></select><button class="primary" type="submit">Add</button></form><p class="tiny">Use weight trends as one signal, not a judgment of daily success.</p></article>
           <article class="card"><div class="stat-pair"><div><span>Latest</span><strong id="latestWeight">—</strong></div><div><span>7-day active days</span><strong id="activeDays">0</strong></div></div></article>
@@ -86,12 +86,12 @@
       </section>
 
       <section id="grocery" class="view">
-        <div class="section-title"><div><span class="eyebrow">SHOPPING</span><h2>Grocery list</h2></div><button id="buildGrocery" class="secondary">Build from meal plan</button></div>
+        <div class="section-title"><div><span class="eyebrow">SHOPPING</span><h2>Grocery list</h2></div><div class="section-actions"><button class="back-dashboard ghost" data-go="dashboard">← Dashboard</button><button id="buildGrocery" class="secondary">Build from meal plan</button></div></div>
         <article class="card"><form id="groceryForm" class="row"><input id="groceryItem" placeholder="Add grocery item" required /><select id="groceryCategory"><option>Produce</option><option>Protein</option><option>Dairy</option><option>Grains</option><option>Pantry</option><option>Other</option></select><button class="primary" type="submit">Add</button></form><div id="groceryList" class="grocery-list"></div></article>
       </section>
 
       <section id="coach" class="view">
-        <div class="section-title"><div><span class="eyebrow">OPTIONAL AI</span><h2>ChatGPT feedback</h2></div><span id="aiStatus" class="pill">Checking…</span></div>
+        <div class="section-title"><div><span class="eyebrow">OPTIONAL AI</span><h2>ChatGPT feedback</h2></div><div class="section-actions"><button class="back-dashboard ghost" data-go="dashboard">← Dashboard</button><span id="aiStatus" class="pill">Checking…</span></div></div>
         <div class="grid two">
           <article class="card"><h3>Ask for feedback</h3><div id="chat" class="chat"></div><form id="chatForm" class="stack"><textarea id="chatInput" rows="4" placeholder="Example: How can I make today's meals more balanced?" required></textarea><button class="primary" type="submit">Get feedback</button></form></article>
           <article class="card"><div class="card-head"><div><h3>Weekly review</h3><p class="muted">Summarizes your recent logs into practical next steps.</p></div><button id="weeklyReportBtn" class="secondary">Generate</button></div><div id="weeklyReport" class="report empty">No weekly review yet.</div></article>
@@ -99,7 +99,7 @@
       </section>
 
       <section id="settings" class="view">
-        <div class="section-title"><div><span class="eyebrow">PERSONAL PLAN</span><h2>Goals & meal ideas</h2></div></div>
+        <div class="section-title"><div><span class="eyebrow">PERSONAL PLAN</span><h2>Goals & meal ideas</h2></div><button class="back-dashboard ghost" data-go="dashboard">← Dashboard</button></div>
         <div class="grid two">
           <article class="card"><form id="profileForm" class="stack"><label>Goal<select id="goal"><option>Maintain weight</option><option>Gradual weight loss</option><option>Gradual weight gain</option><option>Improve food quality</option><option>Build consistent habits</option></select></label><div class="row"><label>Daily calorie target<input id="targetCalories" type="number" min="800" max="6000" /></label><label>Protein target (g)<input id="targetProtein" type="number" min="20" max="400" /></label></div><label>Water target (cups)<input id="targetWater" type="number" min="1" max="30" /></label><label>Eating style<select id="dietStyle"><option>Balanced</option><option>Mediterranean</option><option>Vegetarian</option><option>Vegan</option><option>High-protein</option><option>Lower-carb</option></select></label><label>Foods you like<textarea id="likes" rows="2"></textarea></label><label>Foods to avoid / preferences<textarea id="avoid" rows="2"></textarea></label><button class="primary" type="submit">Save preferences</button></form></article>
           <article class="card"><div class="card-head"><div><h3>Suggested day</h3><p class="muted">A flexible template based on your preferences.</p></div><button id="generatePlan" class="secondary">Generate</button></div><div id="plan"></div><p class="tiny">Targets and meal ideas are planning tools, not medical prescriptions. For medical diets or conditions, use guidance from your clinician or registered dietitian.</p></article>

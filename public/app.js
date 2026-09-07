@@ -155,7 +155,10 @@ $('mealPhoto').addEventListener('change', e => {
 $('mealForm').addEventListener('submit', e => {
   e.preventDefault();
   day().meals.push({ id:crypto.randomUUID(), name:$('mealName').value.trim(), type:$('mealType').value, calories:Number($('mealCalories').value), protein:Number($('mealProtein').value), barcode:$('barcodeInput').value.trim(), photo:photoData, createdAt:new Date().toISOString() });
-  e.target.reset(); photoData=''; $('photoPreview').classList.add('hidden'); $('photoHint').classList.remove('hidden'); queueSave();
+  e.target.reset(); photoData=''; $('photoPreview').classList.add('hidden'); $('photoHint').classList.remove('hidden');
+  queueSave();
+  showView('dashboard');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 
 $('scanBarcode').onclick=async()=>{
