@@ -5,15 +5,17 @@ import OpenAI from 'openai';
 import { createClient } from '@supabase/supabase-js';
 
 import path from 'path';
-import fs from 'fs/promises';
 import { fileURLToPath } from 'url';
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
 
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_ANON_KEY;
+
 const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY,
+  SUPABASE_URL,
+  SUPABASE_KEY,
   {
     auth: {
       persistSession: false,
@@ -25,38 +27,8 @@ const supabase = createClient(
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_DIR = path.join(__dirname, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'store.json');
-
 app.use(express.json({ limit: '4mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-
-const blankStore = () => ({
-  users: {}
-});
-
-async function loadStore() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-
-  try {
-    return JSON.parse(
-      await fs.readFile(DATA_FILE, 'utf8')
-    );
-  } catch {
-    const store = blankStore();
-    await saveStore(store);
-    return store;
-  }
-}
-
-async function saveStore(store) {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-
-  await fs.writeFile(
-    DATA_FILE,
-    JSON.stringify(store, null, 2)
-  );
-}
 
 function defaultData(name = 'Friend') {
   return {
@@ -79,85 +51,137 @@ function defaultData(name = 'Friend') {
   };
 }
 
-async function getOrCreateLocalUser(supabaseUser) {
-  const store = await loadStore();
+/*
+  Create a Supabase client that sends the logged-in
+  user's access token.
 
-  const userId = supabaseUser.id;
+  This allows Row Level Security to recognize auth.uid().
+*/
+function createUserClient(token) {
+  return createClient(
+    SUPABASE_URL,
+    SUPABASE_KEY,
+    {
+      global: {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      },
 
-  const name =
-    supabaseUser.user_metadata?.name ||
-    supabaseUser.user_metadata?.full_name ||
-    supabaseUser.email?.split('@')[0] ||
-    'Friend';
-
-  if (!store.users[userId]) {
-    store.users[userId] = {
-      id: userId,
-      email: supabaseUser.email,
-      name,
-      data: defaultData(name)
-    };
-
-    await saveStore(store);
-  } else {
-    store.users[userId].email =
-      supabaseUser.email;
-
-    if (!store.users[userId].name) {
-      store.users[userId].name = name;
+      auth: {
+        persistSession: false,
+        autoRefreshToken: false
+      }
     }
-
-    await saveStore(store);
-  }
-
-  return {
-    store,
-    user: store.users[userId]
-  };
+  );
 }
 
-async function requireAuth(req, res, next) {
-  const token = (
-    req.headers.authorization || ''
-  ).replace(/^Bearer\s+/i, '');
+/*
+  Load the user's saved NutriTrack state.
 
-  if (!token) {
-    return res.status(401).json({
-      error: 'Please sign in.'
-    });
-  }
+  If this is their first time, create a new row automatically.
+*/
+async function loadUserState(token, user) {
+  const client = createUserClient(token);
 
   const {
     data,
     error
-  } = await supabase.auth.getUser(token);
+  } = await client
+    .from('user_state')
+    .select('data')
+    .eq('user_id', user.id)
+    .maybeSingle();
 
-  if (
-    error ||
-    !data?.user
-  ) {
-    return res.status(401).json({
-      error:
-        'Session expired. Please sign in again.'
-    });
+  if (error) {
+    throw error;
   }
 
+  if (data?.data) {
+    return data.data;
+  }
+
+  const name =
+    user.user_metadata?.name ||
+    user.user_metadata?.full_name ||
+    user.email?.split('@')[0] ||
+    'Friend';
+
+  const initialData = defaultData(name);
+
   const {
-    store,
-    user
-  } = await getOrCreateLocalUser(
-    data.user
-  );
+    error: insertError
+  } = await client
+    .from('user_state')
+    .insert({
+      user_id: user.id,
+      data: initialData,
+      updated_at: new Date().toISOString()
+    });
 
-  req.accessToken = token;
-  req.supabaseUser = data.user;
-  req.store = store;
-  req.user = user;
-  req.userId = data.user.id;
+  if (insertError) {
+    throw insertError;
+  }
 
-  next();
+  return initialData;
 }
 
+/*
+  Authentication middleware
+*/
+async function requireAuth(req, res, next) {
+  try {
+    const token = (
+      req.headers.authorization || ''
+    ).replace(/^Bearer\s+/i, '');
+
+    if (!token) {
+      return res.status(401).json({
+        error: 'Please sign in.'
+      });
+    }
+
+    const {
+      data,
+      error
+    } = await supabase.auth.getUser(token);
+
+    if (
+      error ||
+      !data?.user
+    ) {
+      return res.status(401).json({
+        error:
+          'Session expired. Please sign in again.'
+      });
+    }
+
+    const userData = await loadUserState(
+      token,
+      data.user
+    );
+
+    req.accessToken = token;
+    req.supabaseUser = data.user;
+    req.userData = userData;
+
+    next();
+  } catch (error) {
+    console.error(
+      'Authentication error:',
+      error
+    );
+
+    res.status(500).json({
+      error:
+        'Unable to load your account.'
+    });
+  }
+}
+
+/*
+  Health check
+*/
 app.get(
   '/api/health',
   (_req, res) => {
@@ -169,227 +193,365 @@ app.get(
       ),
 
       supabaseConfigured: Boolean(
-        process.env.SUPABASE_URL &&
-        process.env.SUPABASE_ANON_KEY
+        SUPABASE_URL &&
+        SUPABASE_KEY
       )
     });
   }
 );
 
+/*
+  CREATE ACCOUNT
+*/
 app.post(
   '/api/auth/register',
   async (req, res) => {
-    const email = String(
-      req.body?.email || ''
-    )
-      .trim()
-      .toLowerCase();
+    try {
+      const email = String(
+        req.body?.email || ''
+      )
+        .trim()
+        .toLowerCase();
 
-    const name = String(
-      req.body?.name || ''
-    )
-      .trim()
-      .slice(0, 60);
+      const name = String(
+        req.body?.name || ''
+      )
+        .trim()
+        .slice(0, 60);
 
-    const password = String(
-      req.body?.password || ''
-    );
+      const password = String(
+        req.body?.password || ''
+      );
 
-    if (
-      !/^\S+@\S+\.\S+$/.test(email)
-    ) {
-      return res
-        .status(400)
-        .json({
-          error:
-            'Enter a valid email.'
-        });
-    }
-
-    if (password.length < 8) {
-      return res
-        .status(400)
-        .json({
-          error:
-            'Password must be at least 8 characters.'
-        });
-    }
-
-    const {
-      data,
-      error
-    } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: {
-          name:
-            name ||
-            email.split('@')[0]
-        }
+      if (
+        !/^\S+@\S+\.\S+$/.test(email)
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              'Enter a valid email.'
+          });
       }
-    });
 
-    if (error) {
-      return res
-        .status(400)
-        .json({
-          error: error.message
+      if (
+        password.length < 8
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              'Password must be at least 8 characters.'
+          });
+      }
+
+      const {
+        data,
+        error
+      } =
+        await supabase.auth.signUp({
+          email,
+          password,
+
+          options: {
+            data: {
+              name:
+                name ||
+                email.split('@')[0]
+            }
+          }
         });
-    }
 
-    if (!data.user) {
-      return res
-        .status(400)
-        .json({
-          error:
-            'Unable to create account.'
+      if (error) {
+        return res
+          .status(400)
+          .json({
+            error: error.message
+          });
+      }
+
+      if (!data.user) {
+        return res
+          .status(400)
+          .json({
+            error:
+              'Unable to create account.'
+          });
+      }
+
+      /*
+        If email confirmation is required,
+        Supabase won't provide a session yet.
+      */
+      if (
+        !data.session?.access_token
+      ) {
+        return res.json({
+          needsConfirmation: true,
+
+          message:
+            'Account created. Please confirm your email, then sign in.'
         });
-    }
+      }
 
-    const {
-      user
-    } = await getOrCreateLocalUser(
-      data.user
-    );
+      const token =
+        data.session.access_token;
 
-    if (!data.session?.access_token) {
-      return res.json({
-        needsConfirmation: true,
-        message:
-          'Account created. Check your email if confirmation is required.'
+      const userData =
+        await loadUserState(
+          token,
+          data.user
+        );
+
+      res.json({
+        token,
+
+        user: {
+          id: data.user.id,
+          email: data.user.email,
+
+          name:
+            data.user
+              .user_metadata
+              ?.name ||
+            email.split('@')[0]
+        },
+
+        data: userData
+      });
+    } catch (error) {
+      console.error(
+        'Registration error:',
+        error
+      );
+
+      res.status(500).json({
+        error:
+          'Unable to create account.'
       });
     }
-
-    res.json({
-      token:
-        data.session.access_token,
-
-      user: {
-        id: data.user.id,
-        email: data.user.email,
-        name: user.name
-      },
-
-      data: user.data
-    });
   }
 );
 
+/*
+  SIGN IN
+*/
 app.post(
   '/api/auth/login',
   async (req, res) => {
-    const email = String(
-      req.body?.email || ''
-    )
-      .trim()
-      .toLowerCase();
+    try {
+      const email = String(
+        req.body?.email || ''
+      )
+        .trim()
+        .toLowerCase();
 
-    const password = String(
-      req.body?.password || ''
-    );
+      const password = String(
+        req.body?.password || ''
+      );
 
-    const {
-      data,
-      error
-    } =
-      await supabase.auth.signInWithPassword({
-        email,
-        password
-      });
-
-    if (
-      error ||
-      !data.user ||
-      !data.session
-    ) {
-      return res
-        .status(401)
-        .json({
-          error:
-            error?.message ||
-            'Incorrect email or password.'
+      const {
+        data,
+        error
+      } =
+        await supabase.auth.signInWithPassword({
+          email,
+          password
         });
+
+      if (
+        error ||
+        !data.user ||
+        !data.session
+      ) {
+        return res
+          .status(401)
+          .json({
+            error:
+              error?.message ||
+              'Incorrect email or password.'
+          });
+      }
+
+      const token =
+        data.session.access_token;
+
+      const userData =
+        await loadUserState(
+          token,
+          data.user
+        );
+
+      res.json({
+        token,
+
+        user: {
+          id: data.user.id,
+          email: data.user.email,
+
+          name:
+            data.user
+              .user_metadata
+              ?.name ||
+            data.user.email
+              ?.split('@')[0] ||
+            'Friend'
+        },
+
+        data: userData
+      });
+    } catch (error) {
+      console.error(
+        'Login error:',
+        error
+      );
+
+      res.status(500).json({
+        error:
+          'Unable to sign in.'
+      });
     }
-
-    const {
-      user
-    } = await getOrCreateLocalUser(
-      data.user
-    );
-
-    res.json({
-      token:
-        data.session.access_token,
-
-      user: {
-        id: data.user.id,
-        email: data.user.email,
-        name: user.name
-      },
-
-      data: user.data
-    });
   }
 );
 
+/*
+  LOG OUT
+*/
 app.post(
   '/api/auth/logout',
   requireAuth,
-  async (_req, res) => {
+  async (req, res) => {
+    try {
+      const client =
+        createUserClient(
+          req.accessToken
+        );
+
+      await client.auth.signOut();
+    } catch {
+      // The browser will still remove its token.
+    }
+
     res.json({
       ok: true
     });
   }
 );
 
+/*
+  LOAD CURRENT USER + DATA
+*/
 app.get(
   '/api/me',
   requireAuth,
   async (req, res) => {
+    const user =
+      req.supabaseUser;
+
     res.json({
       user: {
-        id: req.user.id,
-        email: req.user.email,
-        name: req.user.name
+        id: user.id,
+        email: user.email,
+
+        name:
+          user.user_metadata
+            ?.name ||
+          user.email
+            ?.split('@')[0] ||
+          'Friend'
       },
 
-      data: req.user.data
+      data:
+        req.userData
     });
   }
 );
 
+/*
+  SAVE ALL NUTRITION / PROGRESS DATA
+*/
 app.put(
   '/api/data',
   requireAuth,
   async (req, res) => {
-    const data =
-      req.body?.data;
+    try {
+      const data =
+        req.body?.data;
 
-    if (
-      !data ||
-      typeof data !== 'object'
-    ) {
-      return res
-        .status(400)
-        .json({
-          error:
-            'Invalid data.'
-        });
+      if (
+        !data ||
+        typeof data !== 'object'
+      ) {
+        return res
+          .status(400)
+          .json({
+            error:
+              'Invalid data.'
+          });
+      }
+
+      const client =
+        createUserClient(
+          req.accessToken
+        );
+
+      const {
+        error
+      } = await client
+        .from('user_state')
+        .upsert(
+          {
+            user_id:
+              req.supabaseUser.id,
+
+            data,
+
+            updated_at:
+              new Date()
+                .toISOString()
+          },
+          {
+            onConflict:
+              'user_id'
+          }
+        );
+
+      if (error) {
+        console.error(
+          'Save error:',
+          error
+        );
+
+        return res
+          .status(500)
+          .json({
+            error:
+              'Unable to save progress.'
+          });
+      }
+
+      req.userData = data;
+
+      res.json({
+        ok: true
+      });
+    } catch (error) {
+      console.error(
+        'Data save error:',
+        error
+      );
+
+      res.status(500).json({
+        error:
+          'Unable to save progress.'
+      });
     }
-
-    req.user.data = data;
-
-    await saveStore(
-      req.store
-    );
-
-    res.json({
-      ok: true
-    });
   }
 );
 
+/*
+  Prepare recent data for AI feedback
+*/
 function summarizeData(data) {
   const entries =
     Object.entries(
@@ -403,16 +565,23 @@ function summarizeData(data) {
       ([date, day]) => ({
         date,
 
-        meals: (
-          day.meals || []
-        ).map((meal) => ({
-          name: meal.name,
-          type: meal.type,
-          calories:
-            meal.calories,
-          protein:
-            meal.protein
-        })),
+        meals:
+          (day.meals || [])
+            .map(
+              (meal) => ({
+                name:
+                  meal.name,
+
+                type:
+                  meal.type,
+
+                calories:
+                  meal.calories,
+
+                protein:
+                  meal.protein
+              })
+            ),
 
         water:
           day.water,
@@ -428,19 +597,21 @@ function summarizeData(data) {
 
     recent,
 
-    weights: (
-      data.weights || []
-    ).slice(-8)
+    weights:
+      (data.weights || [])
+        .slice(-8)
   };
 }
 
+/*
+  OpenAI helper
+*/
 async function runAI(
   instructions,
   input
 ) {
   if (
-    !process.env
-      .OPENAI_API_KEY
+    !process.env.OPENAI_API_KEY
   ) {
     throw Object.assign(
       new Error(
@@ -455,15 +626,13 @@ async function runAI(
   const client =
     new OpenAI({
       apiKey:
-        process.env
-          .OPENAI_API_KEY
+        process.env.OPENAI_API_KEY
     });
 
   const response =
     await client.responses.create({
       model:
-        process.env
-          .OPENAI_MODEL ||
+        process.env.OPENAI_MODEL ||
         'gpt-5.6-luna',
 
       instructions,
@@ -476,6 +645,9 @@ async function runAI(
   );
 }
 
+/*
+  AI COACH
+*/
 app.post(
   '/api/chat',
   requireAuth,
@@ -497,7 +669,7 @@ app.post(
       const context =
         JSON.stringify(
           summarizeData(
-            req.user.data
+            req.userData
           )
         ).slice(
           0,
@@ -506,7 +678,8 @@ app.post(
 
       const reply =
         await runAI(
-          `You are a supportive nutrition and habit coach inside a wellness app. Use the supplied app data only as context. Give practical, non-judgmental suggestions. Do not diagnose disease or prescribe treatment. Do not encourage crash diets, purging, starvation, unsafe supplements, or extreme restriction. If pregnancy, eating disorders, serious symptoms, medical conditions, or medically prescribed diets are relevant, recommend a qualified clinician or registered dietitian. Avoid false precision around calorie needs. Keep replies concise and actionable. App data: ${context}`,
+          `You are a supportive nutrition and habit coach inside a wellness app. Use the supplied app data only as context. Give practical, non-judgmental suggestions. Do not diagnose disease or prescribe treatment. Do not encourage crash diets, starvation, purging, unsafe supplements, or extreme restriction. If pregnancy, eating disorders, serious symptoms, medical conditions, or medically prescribed diets are relevant, recommend a qualified clinician or registered dietitian. Keep replies concise and actionable. App data: ${context}`,
+
           message
         );
 
@@ -528,6 +701,9 @@ app.post(
   }
 );
 
+/*
+  WEEKLY AI REPORT
+*/
 app.post(
   '/api/weekly-report',
   requireAuth,
@@ -536,7 +712,7 @@ app.post(
       const context =
         JSON.stringify(
           summarizeData(
-            req.user.data
+            req.userData
           )
         ).slice(
           0,
@@ -546,6 +722,7 @@ app.post(
       const report =
         await runAI(
           `Create a short weekly nutrition and habit review from the supplied data. Use four headings: Wins, Patterns, Next-week focus, Encouragement. Never diagnose or shame. If data is sparse, say so. Keep recommendations practical and moderate. App data: ${context}`,
+
           'Generate my weekly review.'
         );
 
@@ -567,6 +744,9 @@ app.post(
   }
 );
 
+/*
+  Send index.html for application routes
+*/
 app.use(
   (_req, res) => {
     res.sendFile(
@@ -583,7 +763,7 @@ app.listen(
   port,
   () => {
     console.log(
-      `NutriTrack AI running at http://localhost:${port}`
+      `NutriTrack AI running on port ${port}`
     );
   }
 );
